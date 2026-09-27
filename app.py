@@ -66,8 +66,12 @@ def gestionar_productos():
     cursor = conn.cursor()
     if request.method == 'POST':
         datos = request.json
-        cursor.execute("INSERT INTO productos (nombre, precio_compra, precio_venta) VALUES (?, ?, ?)",
-                       (datos['nombre'], float(datos['precio_compra']), float(datos['precio_venta'])))
+        if 'id' in datos and datos['id']:
+            cursor.execute("UPDATE productos SET nombre=?, precio_compra=?, precio_venta=? WHERE id=?",
+                           (datos['nombre'], float(datos['precio_compra']), float(datos['precio_venta']), datos['id']))
+        else:
+            cursor.execute("INSERT INTO productos (nombre, precio_compra, precio_venta) VALUES (?, ?, ?)",
+                           (datos['nombre'], float(datos['precio_compra']), float(datos['precio_venta'])))
         conn.commit()
         conn.close()
         return jsonify({"status": "ok"})
@@ -92,8 +96,14 @@ def gestionar_plantillas():
     cursor = conn.cursor()
     if request.method == 'POST':
         datos = request.json
-        cursor.execute("INSERT INTO plantillas (nombre) VALUES (?)", (datos['nombre'],))
-        plantilla_id = cursor.lastrowid
+        plantilla_id = datos.get('id')
+        if plantilla_id:
+            cursor.execute("UPDATE plantillas SET nombre=? WHERE id=?", (datos['nombre'], plantilla_id))
+            cursor.execute("DELETE FROM plantilla_items WHERE plantilla_id=?", (plantilla_id,))
+        else:
+            cursor.execute("INSERT INTO plantillas (nombre) VALUES (?)", (datos['nombre'],))
+            plantilla_id = cursor.lastrowid
+
         for item in datos.get('items', []):
             cursor.execute("INSERT INTO plantilla_items (plantilla_id, producto_id, cantidad) VALUES (?, ?, ?)",
                            (plantilla_id, item['producto_id'], float(item['cantidad'])))
@@ -116,6 +126,16 @@ def gestionar_plantillas():
         plantillas.append({"id": p_id, "nombre": p_nombre, "items": items})
     conn.close()
     return jsonify(plantillas)
+
+@app.route('/api/plantillas/<int:plantilla_id>', methods=['DELETE'])
+def eliminar_plantilla(plantilla_id):
+    conn = sqlite3.connect('negocio_gas.db')
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM plantillas WHERE id = ?", (plantilla_id,))
+    cursor.execute("DELETE FROM plantilla_items WHERE plantilla_id = ?", (plantilla_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "ok"})
 
 @app.route('/api/obras', methods=['GET', 'POST'])
 def gestionar_obras():
@@ -163,14 +183,15 @@ HTML_TEMPLATE = """
         button:hover { background-color: #f57f17; color: white; }
         .btn-green { background-color: #2e7d32; color: white; }
         .btn-green:hover { background-color: #1b5e20; }
-        .btn-danger { background-color: #d32f2f; color: white; padding: 5px 10px; width: auto; }
+        .btn-warning { background-color: #f57f17; color: white; padding: 5px 10px; width: auto; font-size: 12px; margin-top:0; }
+        .btn-danger { background-color: #d32f2f; color: white; padding: 5px 10px; width: auto; font-size: 12px; margin-top:0; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { border: 1px solid #e0e0e0; padding: 10px; text-align: left; font-size: 14px; }
         th { background-color: #fffde7; }
         .kpi-container { display: flex; gap: 15px; margin-top: 15px; }
         .kpi { flex: 1; background: #fffde7; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #fff59d; }
-        .kpi h3 { margin: 0; font-size: 22px; color: #f57f17; }
-        .kpi p { margin: 5px 0 0 0; font-size: 12px; font-weight: bold; color: #666; }
+        .kpi h3 { margin: 0; font-size: 20px; color: #f57f17; }
+        .kpi p { margin: 5px 0 0 0; font-size: 11px; font-weight: bold; color: #666; }
         .row-item { display: flex; gap: 10px; margin-top: 8px; align-items: center; }
         .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
         .tab-btn { background: #eee; color: #333; border: none; padding: 10px 20px; border-radius: 20px; cursor: pointer; width: auto; font-weight: bold; }
@@ -181,7 +202,7 @@ HTML_TEMPLATE = """
 
     <div class="header">
         <h1>GAS LP GUANACASTE</h1>
-        <span>Control Financiero de Instalaciones</span>
+        <span>Control Financiero</span>
     </div>
 
     <div class="container">
@@ -200,8 +221,8 @@ HTML_TEMPLATE = """
                 <div class="grid">
                     <div>
                         <label>Cliente / Ubicación Obra:</label>
-                        <input type="text" id="obra_cliente" placeholder="Ej: San Martín, Liberia">
-                        <label>Cargar Plantilla Predeterminada:</label>
+                        <input type="text" id="obra_cliente" placeholder="Ej: Cliente 01, Liberia">
+                        <label>Plantilla Predeterminada:</label>
                         <select id="select_plantilla" onchange="cargarPlantillaEnObra()">
                             <option value="">-- Trabajo Personalizado --</option>
                         </select>
@@ -222,17 +243,17 @@ HTML_TEMPLATE = """
 
                 <div class="kpi-container">
                     <div class="kpi"><h3 id="res_ingreso">₡0</h3><p>INGRESO TOTAL</p></div>
-                    <div class="kpi"><h3 id="res_costo">₡0</h3><p>COSTO OPERATIVO</p></div>
+                    <div class="kpi"><h3 id="res_costo">₡0</h3><p>SALARIOS Y COSTOS OPERATIVOS</p></div>
                     <div class="kpi" style="background:#e8f5e9;"><h3 id="res_ganancia" style="color:#2e7d32;">₡0</h3><p>GANANCIA REAL LIMPIA</p></div>
                 </div>
 
                 <div class="kpi-container" style="margin-top:10px;">
-                    <div class="kpi"><h3 id="rep_insumos">₡0</h3><p>📦 CAJA INSUMOS (Costo + 40%)</p></div>
-                    <div class="kpi"><h3 id="rep_inversion">₡0</h3><p>🚀 OTROS NEGOCIOS (30%)</p></div>
-                    <div class="kpi"><h3 id="rep_ahorro">₡0</h3><p>🏦 AHORRO EMPRESA (30%)</p></div>
+                    <div class="kpi"><h3 id="rep_insumos">₡0</h3><p>INSUMOS</p></div>
+                    <div class="kpi"><h3 id="rep_inversion">₡0</h3><p>OTROS NEGOCIOS</p></div>
+                    <div class="kpi"><h3 id="rep_ahorro">₡0</h3><p>AHORRO GAS</p></div>
                 </div>
 
-                <button onclick="guardarTrabajoEnHistorial()" class="btn-green" style="margin-top:20px; font-size:18px;">💾 Guardar Trabajo en Historial</button>
+                <button onclick="guardarTrabajoEnHistorial()" class="btn-green" style="margin-top:20px; font-size:18px;">Guardar Trabajo en Historial</button>
             </div>
         </div>
 
@@ -240,20 +261,22 @@ HTML_TEMPLATE = """
         <div id="tab_productos" class="tab-content" style="display:none;">
             <div class="grid">
                 <div class="card">
-                    <h2>Nuevo Producto</h2>
+                    <h2 id="titulo_form_producto">Nuevo Insumo</h2>
+                    <input type="hidden" id="p_id">
                     <label>Nombre del Insumo:</label>
                     <input type="text" id="p_nombre">
                     <label>Precio Compra (₡):</label>
                     <input type="number" id="p_compra">
                     <label>Precio Venta (₡):</label>
                     <input type="number" id="p_venta">
-                    <button onclick="guardarProducto()">Guardar En Base de Datos</button>
+                    <button onclick="guardarProducto()" id="btn_guardar_p">Guardar En Base de Datos</button>
+                    <button onclick="limpiarFormProducto()" style="background:#ccc; display:none;" id="btn_cancelar_p">Cancelar Edición</button>
                 </div>
                 <div class="card">
                     <h2>Insumos Registrados</h2>
                     <table>
                         <thead>
-                            <tr><th>Nombre</th><th>Costo</th><th>Venta</th><th>Ganancia</th><th>Acción</th></tr>
+                            <tr><th>Nombre</th><th>Costo</th><th>Venta</th><th>Acciones</th></tr>
                         </thead>
                         <tbody id="tabla_productos"></tbody>
                     </table>
@@ -263,27 +286,47 @@ HTML_TEMPLATE = """
 
         <!-- TAB 3: PLANTILLAS -->
         <div id="tab_plantillas" class="tab-content" style="display:none;">
-            <div class="card">
-                <h2>Crear Plantilla Predeterminada</h2>
-                <label>Nombre de la Plantilla:</label>
-                <input type="text" id="plantilla_nombre" placeholder="Ej: Instalación Completa Certificada">
-                <h3>Insumos de la Plantilla</h3>
-                <div id="items_plantilla"></div>
-                <button type="button" class="btn-green" onclick="agregarFilaPlantilla()">+ Agregar Insumo</button>
-                <button onclick="guardarPlantilla()" style="margin-top:15px;">Guardar Configuración</button>
+            <div class="grid">
+                <div class="card">
+                    <h2 id="titulo_form_plantilla">Crear / Editar Plantilla</h2>
+                    <input type="hidden" id="plantilla_id">
+                    <label>Nombre de la Plantilla:</label>
+                    <input type="text" id="plantilla_nombre" placeholder="Ej: Instalación Completa Certificada">
+                    <h3>Insumos de la Plantilla</h3>
+                    <div id="items_plantilla"></div>
+                    <button type="button" class="btn-green" onclick="agregarFilaPlantilla()">+ Agregar Insumo</button>
+                    <button onclick="guardarPlantilla()" style="margin-top:15px;">Guardar Configuración</button>
+                    <button onclick="limpiarFormPlantilla()" style="background:#ccc; display:none;" id="btn_cancelar_plantilla">Cancelar Edición</button>
+                </div>
+                <div class="card">
+                    <h2>Plantillas Existentes</h2>
+                    <table>
+                        <thead>
+                            <tr><th>Nombre</th><th>Insumos</th><th>Acciones</th></tr>
+                        </thead>
+                        <tbody id="tabla_plantillas_lista"></tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
         <!-- TAB 4: HISTORIAL -->
         <div id="tab_historial" class="tab-content" style="display:none;">
             <div class="card">
-                <h2>Historial de Trabajos Realizados</h2>
+                <h2>Resumen General de Ingresos</h2>
+                <div class="kpi-container">
+                    <div class="kpi"><h3 id="tot_semana">₡0</h3><p>GANANCIA ESTA SEMANA</p></div>
+                    <div class="kpi"><h3 id="tot_mes">₡0</h3><p>GANANCIA ESTE MES</p></div>
+                    <div class="kpi" style="background:#e8f5e9;"><h3 id="tot_general" style="color:#2e7d32;">₡0</h3><p>GANANCIA HISTÓRICA TOTAL</p></div>
+                </div>
+                <br>
+                <h2>Historial Detallado de Trabajos</h2>
                 <table>
                     <thead>
                         <tr>
                             <th>Fecha</th>
                             <th>Cliente</th>
-                            <th>Ingreso</th>
+                            <th>Ingreso Total</th>
                             <th>Costo Operativo</th>
                             <th>Ganancia Limpia</th>
                             <th>Caja Insumos</th>
@@ -318,45 +361,75 @@ HTML_TEMPLATE = """
             const rPlan = await fetch('/api/plantillas');
             plantillas = await rPlan.json();
             renderPlantillasSelect();
+            renderTablaPlantillas();
 
             cargarHistorial();
         }
 
+        // --- PRODUCTOS ---
         function renderProductos() {
             const tb = document.getElementById('tabla_productos');
             tb.innerHTML = '';
             productos.forEach(p => {
                 tb.innerHTML += `<tr>
-                    <td>${p.nombre}</td>
+                    <td><b>${p.nombre}</b></td>
                     <td>₡${p.precio_compra.toLocaleString()}</td>
                     <td>₡${p.precio_venta.toLocaleString()}</td>
-                    <td>₡${p.ganancia.toLocaleString()}</td>
-                    <td><button class="btn-danger" onclick="eliminarProducto(${p.id})">x</button></td>
+                    <td>
+                        <button class="btn-warning" onclick="editarProducto(${p.id})">Editar</button>
+                        <button class="btn-danger" onclick="eliminarProducto(${p.id})">x</button>
+                    </td>
                 </tr>`;
             });
         }
 
+        function editarProducto(id) {
+            const p = productos.find(x => x.id == id);
+            if(p) {
+                document.getElementById('p_id').value = p.id;
+                document.getElementById('p_nombre').value = p.nombre;
+                document.getElementById('p_compra').value = p.precio_compra;
+                document.getElementById('p_venta').value = p.precio_venta;
+                document.getElementById('titulo_form_producto').innerText = 'Editar Insumo';
+                document.getElementById('btn_guardar_p').innerText = 'Actualizar Insumo';
+                document.getElementById('btn_cancelar_p').style.display = 'block';
+            }
+        }
+
+        function limpiarFormProducto() {
+            document.getElementById('p_id').value = '';
+            document.getElementById('p_nombre').value = '';
+            document.getElementById('p_compra').value = '';
+            document.getElementById('p_venta').value = '';
+            document.getElementById('titulo_form_producto').innerText = 'Nuevo Insumo';
+            document.getElementById('btn_guardar_p').innerText = 'Guardar En Base de Datos';
+            document.getElementById('btn_cancelar_p').style.display = 'none';
+        }
+
         async function guardarProducto() {
+            const id = document.getElementById('p_id').value;
             await fetch('/api/productos', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
+                    id: id ? parseInt(id) : null,
                     nombre: document.getElementById('p_nombre').value,
                     precio_compra: document.getElementById('p_compra').value,
                     precio_venta: document.getElementById('p_venta').value
                 })
             });
-            document.getElementById('p_nombre').value = '';
-            document.getElementById('p_compra').value = '';
-            document.getElementById('p_venta').value = '';
+            limpiarFormProducto();
             cargarTodo();
         }
 
         async function eliminarProducto(id) {
-            await fetch(`/api/productos/${id}`, { method: 'DELETE' });
-            cargarTodo();
+            if(confirm('¿Seguro de eliminar este insumo?')) {
+                await fetch(`/api/productos/${id}`, { method: 'DELETE' });
+                cargarTodo();
+            }
         }
 
+        // --- INSTALACIÓN ---
         function agregarFilaInsumoObra(prodId = '', cantidad = 1) {
             const div = document.getElementById('lista_insumos_obra');
             const rId = Date.now() + Math.random();
@@ -438,19 +511,59 @@ HTML_TEMPLATE = """
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(calculoActual)
             });
-            alert('¡Instalación guardada exitosamente en el historial!');
+            alert('Instalación guardada exitosamente');
             document.getElementById('lista_insumos_obra').innerHTML = '';
             document.getElementById('obra_cliente').value = '';
             actualizarCalculos();
             cargarHistorial();
         }
 
+        // --- PLANTILLAS ---
         function renderPlantillasSelect() {
             const sel = document.getElementById('select_plantilla');
             sel.innerHTML = '<option value="">-- Trabajo Personalizado --</option>';
             plantillas.forEach(p => {
                 sel.innerHTML += `<option value="${p.id}">${p.nombre}</option>`;
             });
+        }
+
+        function renderTablaPlantillas() {
+            const tb = document.getElementById('tabla_plantillas_lista');
+            tb.innerHTML = '';
+            plantillas.forEach(p => {
+                tb.innerHTML += `<tr>
+                    <td><b>${p.nombre}</b></td>
+                    <td>${p.items.length} insumos</td>
+                    <td>
+                        <button class="btn-warning" onclick="editarPlantilla(${p.id})">Editar</button>
+                        <button class="btn-danger" onclick="eliminarPlantilla(${p.id})">x</button>
+                    </td>
+                </tr>`;
+            });
+        }
+
+        function editarPlantilla(id) {
+            const pl = plantillas.find(x => x.id == id);
+            if(pl) {
+                document.getElementById('plantilla_id').value = pl.id;
+                document.getElementById('plantilla_nombre').value = pl.nombre;
+                document.getElementById('items_plantilla').innerHTML = '';
+                
+                pl.items.forEach(item => {
+                    agregarFilaPlantilla(item.producto_id, item.cantidad);
+                });
+
+                document.getElementById('titulo_form_plantilla').innerText = 'Editar Plantilla';
+                document.getElementById('btn_cancelar_plantilla').style.display = 'block';
+            }
+        }
+
+        function limpiarFormPlantilla() {
+            document.getElementById('plantilla_id').value = '';
+            document.getElementById('plantilla_nombre').value = '';
+            document.getElementById('items_plantilla').innerHTML = '';
+            document.getElementById('titulo_form_plantilla').innerText = 'Crear Plantilla';
+            document.getElementById('btn_cancelar_plantilla').style.display = 'none';
         }
 
         function cargarPlantillaEnObra() {
@@ -464,16 +577,19 @@ HTML_TEMPLATE = """
             }
         }
 
-        function agregarFilaPlantilla() {
+        function agregarFilaPlantilla(prodId = '', cantidad = 1) {
             const div = document.getElementById('items_plantilla');
-            const rId = Date.now();
+            const rId = Date.now() + Math.random();
             let opt = '<option value="">-- Seleccionar Insumo --</option>';
-            productos.forEach(p => { opt += `<option value="${p.id}">${p.nombre}</option>`; });
+            productos.forEach(p => { 
+                opt += `<option value="${p.id}" ${p.id == prodId ? 'selected' : ''}>${p.nombre}</option>`; 
+            });
 
             div.insertAdjacentHTML('beforeend', `
                 <div class="row-item" id="p_row_${rId}">
                     <select id="p_sel_${rId}">${opt}</select>
-                    <input type="number" id="p_cant_${rId}" value="1" placeholder="Cant." style="width:100px;">
+                    <input type="number" id="p_cant_${rId}" value="${cantidad}" placeholder="Cant." style="width:100px;">
+                    <button type="button" class="btn-danger" onclick="document.getElementById('p_row_${rId}').remove();">x</button>
                 </div>
             `);
         }
@@ -488,37 +604,77 @@ HTML_TEMPLATE = """
                 });
             });
 
+            const pId = document.getElementById('plantilla_id').value;
+
             await fetch('/api/plantillas', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({
+                    id: pId ? parseInt(pId) : null,
                     nombre: document.getElementById('plantilla_nombre').value,
                     items: items
                 })
             });
             alert('Plantilla guardada');
-            document.getElementById('plantilla_nombre').value = '';
-            document.getElementById('items_plantilla').innerHTML = '';
+            limpiarFormPlantilla();
             cargarTodo();
         }
 
+        async function eliminarPlantilla(id) {
+            if(confirm('¿Seguro de eliminar esta plantilla?')) {
+                await fetch(`/api/plantillas/${id}`, { method: 'DELETE' });
+                cargarTodo();
+            }
+        }
+
+        // --- HISTORIAL Y ACUMULADOS ---
         async function cargarHistorial() {
             const res = await fetch('/api/obras');
             const data = await res.json();
             const tb = document.getElementById('tabla_historial');
             tb.innerHTML = '';
+
+            let totalHist = 0;
+            let totalMes = 0;
+            let totalSemana = 0;
+
+            const ahora = new Date();
+            const haceSieteDias = new Date();
+            haceSieteDias.setDate(ahora.getDate() - 7);
+
+            const mesActual = ahora.getMonth();
+            const anioActual = ahora.getFullYear();
+
             data.forEach(o => {
+                const ganancia = o.ganancia_limpia || 0;
+                totalHist += ganancia;
+
+                const fechaObra = new Date(o.fecha.replace(' ', 'T'));
+                
+                if(!isNaN(fechaObra.getTime())) {
+                    if(fechaObra >= haceSieteDias) {
+                        totalSemana += ganancia;
+                    }
+                    if(fechaObra.getMonth() === mesActual && fechaObra.getFullYear() === anioActual) {
+                        totalMes += ganancia;
+                    }
+                }
+
                 tb.innerHTML += `<tr>
                     <td>${o.fecha}</td>
                     <td>${o.cliente}</td>
                     <td>₡${o.ingreso_total.toLocaleString()}</td>
                     <td>₡${o.costo_operativo.toLocaleString()}</td>
-                    <td style="font-weight:bold; color:green;">₡${o.ganancia_limpia.toLocaleString()}</td>
+                    <td style="font-weight:bold; color:green;">₡${ganancia.toLocaleString()}</td>
                     <td>₡${o.caja_insumos.toLocaleString()}</td>
                     <td>₡${o.fondo_inversion.toLocaleString()}</td>
                     <td>₡${o.caja_ahorro.toLocaleString()}</td>
                 </tr>`;
             });
+
+            document.getElementById('tot_semana').innerText = '₡' + totalSemana.toLocaleString();
+            document.getElementById('tot_mes').innerText = '₡' + totalMes.toLocaleString();
+            document.getElementById('tot_general').innerText = '₡' + totalHist.toLocaleString();
         }
 
         window.onload = cargarTodo;
